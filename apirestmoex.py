@@ -124,7 +124,7 @@ def today(sec=0):
     return time_str
 
 
-def yea_old():
+def yeas_old():
     time_str = today(31536000)
     return time_str
 
@@ -344,8 +344,8 @@ def run_module():
                     # нужно будет как-то ориентироваться когда тот момент,
                     # что мы выбрали всё и пора переходить на следующий инструмент.
                     # Делать это будем по дате и введем две переменные с начальным значением год назад.
-                    control_date = yea_old()  # Будем контролировать вернувшуюся дату
-                    temp_data_end = yea_old()  # А сюда вставлять дату начала запроса
+                    control_date = yeas_old()  # Будем контролировать вернувшуюся дату
+                    temp_data_end = yeas_old()  # А сюда вставлять дату начала запроса
                     a = 0  # Сбрасываем номер файла с данными по инструменту
                     der = f'{eng[0]}_{mar[0]}_{bon[0]}_{tool_var}_'  # Создаём имя файла
                     while var_load:
@@ -392,7 +392,7 @@ def run_module():
                         else:
                             # В этом else смыла нет, но если кто-то удаляет файлы в момент скачивания датасета,
                             # целостность не потеряется.
-                            temp_data_end = yea_old()
+                            temp_data_end = yeas_old()
 
                         der = der + f'{a:05}'
                         get_requests(url_generate(num=10, engine=eng[0], market=mar[0], board=bon[0], security=tool_var,
