@@ -1,9 +1,10 @@
 import numpy
-from apirestmoex import yeas_old
+
+import apirestmoex
 import json
 
 from pyspark.sql import SparkSession, DataFrame
-# from pyspark.sql.types import StructField, StringType, StructType, DoubleType, IntegerType
+from pyspark.sql.types import StructField, StringType, StructType, DoubleType, IntegerType
 import pyspark.sql.functions as funsp
 from pyspark.sql.window import Window
 
@@ -12,21 +13,22 @@ def data_get(mas_data=None,
              schema=None,
              colons=None
              ):
-    date = yeas_old()
+    actual_date = '2021-12-01'
+    date = apirestmoex.today(apirestmoex.yeas_sec)
     if mas_data is None:
         return 'WARNING: The data loading path is not defined'
     if colons is None:
-        colons = [  # 'BOARDID',
-            'TRADEDATE',
-            'SHORTNAME',
-            'SECID',
-            'NUMTRADES',
-            'OPEN',
-            'LOW',
-            'HIGH',
-            'CLOSE',
-            'WAPRICE',
-            'VOLUME']
+        colons = ['BOARDID',
+                  'TRADEDATE',
+                  'SHORTNAME',
+                  'SECID',
+                  'NUMTRADES',
+                  'OPEN',
+                  'LOW',
+                  'HIGH',
+                  'CLOSE',
+                  'WAPRICE',
+                  'VOLUME']
     spark = SparkSession.builder.getOrCreate()
     if schema is None:
         df = (spark.read.format("csv")
@@ -46,6 +48,9 @@ def data_get(mas_data=None,
     df = df.select(colons).distinct().filter(f'TRADEDATE > "{date}"').orderBy('TRADEDATE')
     # Собираем данные для графика
     graphic = df.select('TRADEDATE', 'SHORTNAME', 'SECID', 'OPEN', 'LOW', 'HIGH', 'CLOSE', )
+    trade_table = df.select('SHORTNAME', 'SECID', 'BOARDID', funsp.col('WAPRICE').alias('PRICE'))\
+        .where(f'TRADEDATE = "{actual_date}"')
+    in_corr = df.select('TRADEDATE', funsp.col('WAPRICE').alias(df.distinct().select('SECID').collect()[0][0]))
     # Добавим расчётов
     df = (df
           # Добавим среднюю цену между открытием и закрытием
@@ -87,36 +92,26 @@ def data_get(mas_data=None,
           .drop('DVAR').drop('LOTVAL').drop('is_last_row_in_window')
           )
     df = df.withColumn('median', ((funsp.col("maxL") + funsp.col("minL")) / 2)).drop('maxL').drop('minL')
+    # df.groupBy('DYNAMIC').agg(funsp.avg('sum_value')).show()
     cov_corr = df.stat.corr("median", "sum_value")
     df2 = (df.groupBy('DYNAMIC').agg((funsp.avg('sum_value') + (funsp.avg('sum_value') * funsp.avg("median")
                                                                 * cov_corr)).alias('result'))
            .withColumn('GRFAL', funsp.round('result', 4)).drop('result')
            )
-    x = [0.03463354352165787, 0.03311048445866749, 0.04251755821355557, 0.07312010297385446, 0.05180765622974695,
-         0.014922689679971039, 0.0412206635197129, 0.019935488161745157, 0.0477067285996301, 0.01979397515515916]
-    y = [1.3625985308703992, 1.911380041476919, 0.6201495271119972, 0.741646289260274, 0.969099165226091,
-         0.9021554240376056, 1.9927760136037005, 0.9146656850940553, 1.0175914997748867, 1.158562702138513]
 
-    val = numpy.vstack((x, y))
-    print(numpy.corrcoef(val))
+    trade_table = (trade_table
+                   .withColumn('RISK_%', funsp.lit(df2.select('GRFAL')
+                                                   .where('DYNAMIC = "falling"').collect()[0][0] * 100))
+                   .withColumn('PROFIT_%', funsp.lit(df2.select('GRFAL')
+                                                     .where('DYNAMIC = "growing"').collect()[0][0] * 100))
+                   )
 
-    df2.show()
+    in_corr.show()
+
+    trade_table.show()
 
     df.show()
 
-    #
-    #
-    # df.select('OPEN', 'CLOSE', 'DTAR').show()
-
-    # uy = df.select('TRADEDATE').distinct()
-    # df.select('SECID').distinct().show()
-    # uy.agg(funsp.count('*')).show()
-
-    # print(df.columns)
-    # dfc.select('name', 'title').show()
-    # dfc.select('name', 'title').filter(funsp.col('name').isin(df.columns)).show()
-    # df.agg(funsp.max(funsp.to_date('TRADEDATE')).cast(StringType()))
-    # out = df.select(funsp.col('CLOSE'), funsp.col('OPEN'))
     return ''
 
 
