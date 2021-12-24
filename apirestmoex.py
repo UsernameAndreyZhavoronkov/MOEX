@@ -2,98 +2,51 @@ import requests
 import json
 import time
 from enum import Enum
+import analtydata
 import os
 
-from pyspark.sql import SparkSession  # DataFrame
-from pyspark.sql.types import StructField, StringType, StructType, DoubleType, IntegerType
-import pyspark.sql.functions as funsp
-
-""" Script выгружает, данные с биржи MOEX, которые хоть как-то могут быть интересны инвесторам,
-  и конечно по некоторым моментам могут возникнуть вопросы, но он уже может вытянуть и сохранить
-  кучу разрозненных файлов по различным инструментам. Которые планируется преобразовать в полезную
-  информацию с помощью pyspark в следующей главе."""
-
 yeas_sec = 31536000  # количество секунд в году
+range_tool = 6  # Максимально количество запросов данных для графиков по одному торговому инструменту
+
+
+class ApiMethod(Enum):
+    GET_ISS = 0
+    GET_MARKETS = 1
+    GET_BOARDS = 2
+    GET_ALL = 3
+    GET_TOOL = 4
+    GET_SEC_QUEST = 5
+    GET_TRADEDATE = 6
+    GET_COLUMNS = 7
+    GET_AVA_HIST = 8
+    GET_AVA_CANDLE = 9
+    GET_CANDLES = 10
+    GET_INFO_INXS = 11
+    GET_INFO_INXS_X = 12
 
 
 def today(sec=0):
-    """ Метод возвращает сегодняшнюю дату или можно отматать, от сегодняшней даты,
+    """ Метод возвращает сегодняшнюю дату по умолчанию или дату какое-то количество секунд назад,
         в формате данных, с которыми будет вестись работа. """
+
     time_time = time.time() - sec
     time_localtime = time.localtime(time_time)
     time_str = time.strftime('%Y-%m-%d', time_localtime)
     return time_str
 
 
-def data_get(data_set_file):
-    #  Это временное решение, для получения последней даты из загруженного фрейма.
-    #  На мой взгляд выглядит жутко прикручивать целый движок для такой задачи,
-    #  переделаю через библиотеку csv.
-    #  Ну уже очень хотелось, что б уже что-то работало, через spark.
-    # df = ''  # Да, не используется, но были случаи когда в переменную сложной структуры, что-то где-то прилипало.
-    #  schema = StructType([StructField('BOARDID', StringType()),
-    #                       StructField('SHORTNAME', StringType()),
-    #                       StructField('NAME', StringType()),
-    #                       StructField('CLOSE', DoubleType()),
-    #                       StructField('OPEN', DoubleType()),
-    #                       StructField('HIGH', DoubleType()),
-    #                       StructField('LOW', DoubleType()),
-    #                       StructField('VALUE', IntegerType()),
-    #                       StructField('DURATION', IntegerType()),
-    #                       StructField('YIELD', IntegerType()),
-    #                       StructField('DECIMALS', IntegerType()),
-    #                       StructField('CAPITALIZATION', IntegerType()),
-    #                       StructField('CURRENCYID', StringType()),
-    #                       StructField('DIVISOR', DoubleType()),
-    #                       StructField('TRADINGSESSION', IntegerType()),
-    #                       StructField('VOLUME', StringType())])
-    spark = SparkSession.builder.getOrCreate()
-    df = (spark.read.format("csv")
-          .option("header", 'true')
-          .option("delimiter", ";")
-          .option("inferSchema", "true")
-          #  .option('mode', 'DROPMALFORMED')
-          #  .schema(schema)
-          .load(f'data/enter/{data_set_file}'))
-    #  df.printSchema()
-    df.select()
+def check_date(temp_data_end):
+    """ Метод возвращает 'True', если переданная ему очень вероятно является последней,
+        за которую опубликованы результаты торгов. """
 
-    #  Весь метод экспериментальный включая следующую, и столь экзотическое получение даты ради узучательных целей.
-
-    out = df.agg(funsp.max(funsp.to_date('TRADEDATE')).cast(StringType())).collect()[0][0]
-    return out
+    return ((time.ctime(time.time())[0:3:1] == 'Mon' and temp_data_end == today(60 * 60 * 72))
+            or (time.ctime(time.time())[0:3:1] == 'Sun' and temp_data_end == today(60 * 60 * 48))
+            or temp_data_end == today(60 * 60 * 24)
+            or temp_data_end == 'NOT_ACTIVE')
 
 
-def get_requests(url, params=None, proxys=None, file_name='file.csv'):
-    """ Метод выполняет запрос и сохраняет данные в соответствии с ожидаемым форматом. """
-    resp = requests.get(url,
-                        params=params,
-                        proxies=proxys)
-    resp_text = resp.text
-
-    #  Решил не пробрасывать через два метода формат ожидаемого ответа, а определять его из строки запроса.
-    fd = url.count('.csv')
-
-    #  Обработка форматов в зависимости от приорететности.
-    if fd > 0:
-        file_res = open(file_name, 'w')
-        print(file_res.write(resp_text))
-        print()
-        file_res.close()
-    else:
-        fd = url.count('.json')
-        if fd > 0:
-            return json.loads(resp.text)
-        else:
-            fd = url.count('.xml')
-            if fd > 0:
-                print(fd, 'xml')
-    #  «ОТМЕЧУ СЕБЕ!!!»  Что-то делать если формат запроса не то что ждали, ли ответ не пришёл.
-    return resp
-
-
-def url_generate(
-        num: int = 0,  # Номер шаблона запроса
+def get_requests(
+        method,  # Номер шаблона запроса
         engine: str = 'stock',  # Торговая платформа
         market: str = 'shares',  # Выбор рынка для торгов
         board: str = 'TQBR',  # Режим торгов
@@ -107,72 +60,77 @@ def url_generate(
         #  Данные можно получать начиная с номера записи,
         #  предварительно узнав сколько записей доступно по инструменту
         start: int = 0,  # Формат ответа интересующих данных
-        data_format: str = '.json'
+        data_format: str = '.json',
+        proxy_s=None
 ):
-    """ Метод возвращает http-запрос сгенерированный из параметров, в соответствии с api moex. """
+    """ Метод возвращает текст ответа на http-запрос сгенерированный из параметров, в соответствии с api moex. """
 
     if security_arr is None:
         security_arr = []
 
-    url_list = [
+    url_list = {
         # [0] Узнать идентификатор в ИСС для фондового рынка.
-        f'http://iss.moex.com/iss/engines{data_format}',
+        ApiMethod.GET_ISS: f'http://iss.moex.com/iss/engines{data_format}',
 
         # [1] Узнать список рынков.
-        f'http://iss.moex.com/iss/engines/{engine}/markets{data_format}',
+        ApiMethod.GET_MARKETS: f'http://iss.moex.com/iss/engines/{engine}/markets{data_format}',
 
         # [2] Узнать режим торгов.
-        f'http://iss.moex.com/iss/engines/{engine}/markets/{market}/boards{data_format}',
+        ApiMethod.GET_BOARDS: f'http://iss.moex.com/iss/engines/{engine}/markets/{market}/boards{data_format}',
 
         # [3] Если необходимо получить и построить весь справочник рынков и режимов сразу.
-        f'http://iss.moex.com/iss{data_format}',
+        ApiMethod.GET_ALL: f'http://iss.moex.com/iss{data_format}',
 
         # [4] Найти требуемый инструмент.
-        f'http://iss.moex.com/iss/engines/{engine}/markets/{market}/boards/{board}/securities{data_format}'
-        f'?marketdata.securities=off',
+        ApiMethod.GET_TOOL: f'http://iss.moex.com/iss/engines/{engine}/markets/{market}/boards/{board}/'
+                            f'securities{data_format}?marketdata.securities=off',
 
         # [5] Найти требуемый инструмент поиском:
-        f'http://iss.moex.com/iss/securities{data_format}?q={security}',
+        ApiMethod.GET_SEC_QUEST: f'http://iss.moex.com/iss/securities{data_format}?q={security}',
 
         # [6] Запросить итоги торгов за интересующую дату.
-        f'http://iss.moex.com/iss/history/engines/{engine}/markets/{market}/boards/{board}/securities/'
-        f'{security}{data_format}?from={date_from}&till={date_till}',
+        ApiMethod.GET_TRADEDATE: f'http://iss.moex.com/iss/history/engines/{engine}/markets/{market}/boards/{board}/'
+                                 f'securities/{security}{data_format}?from={date_from}&till={date_till}',
 
         # [7] Описание полей.
-        f'http://iss.moex.com/iss/engines/{engine}/markets/{market}/securities/columns{data_format}',
+        ApiMethod.GET_COLUMNS: f'http://iss.moex.com/iss/engines/{engine}/markets/{market}/'
+                               f'securities/columns{data_format}',
 
         # [8] Перечень дат, за которые доступна история по инструменту.
-        f'http://iss.moex.com/iss/history/engines/{engine}/markets/{market}/boards/{board}/'
-        f'securities/{security}/dates{data_format}',
+        ApiMethod.GET_AVA_HIST: f'http://iss.moex.com/iss/history/engines/{engine}/markets/{market}/boards/{board}/'
+                                f'securities/{security}/dates{data_format}',
 
         # [9] Даты и интервалы, для которых доступны данные для графиков.
-        f'http://iss.moex.com/iss/history/engines/{engine}/markets/{market}/boards/{board}/securities/{security}/'
-        f'candleborders{data_format}',
+        ApiMethod.GET_AVA_CANDLE: f'http://iss.moex.com/iss/history/engines/{engine}/markets/{market}/boards/{board}/'
+                                  f'securities/{security}/candleborders{data_format}',
 
         # [10] Данные для построения дневных графиков за период.
-        f'http://iss.moex.com/iss/history/engines/{engine}/markets/{market}/boards/{board}/securities/{security}/'
-        f'candles{data_format}?from={date_from}&till={date_till}&interval={interval}&start={start}',
-        #  f'&iss.only=history,history.cursor',
+        ApiMethod.GET_CANDLES: f'http://iss.moex.com/iss/history/engines/{engine}/markets/{market}/boards/{board}/'
+                               f'securities/{security}/candles{data_format}?from={date_from}&till={date_till}'
+                               f'&interval={interval}&start={start}',
 
         # [11] Запрос вернет и статическую и динамическую информацию только по указанным индексам.
-        f'http://iss.moex.com/iss/engines/{engine}/markets/{market}/securities{data_format}'
-        f'?securities={",".join(str(elm) for elm in security_arr)}',
+        ApiMethod.GET_INFO_INXS: f'http://iss.moex.com/iss/engines/{engine}/markets/{market}/securities{data_format}'
+                                 f'?securities={",".join(str(elm) for elm in security_arr)}',
 
         # [12] Запрос вернет статическую информацию по всем индексам, а текущие динамические параметры – по указанным.
-        f'http://iss.moex.com/iss/engines/{engine}/markets/{market}/securities{data_format}'
-        f'?marketdata.securities={",".join(str(elm) for elm in security_arr)}'
-    ]
-    return url_list[num]
+        ApiMethod.GET_INFO_INXS_X: f'http://iss.moex.com/iss/engines/{engine}/markets/{market}/securities{data_format}'
+                                   f'?marketdata.securities={",".join(str(elm) for elm in security_arr)}'
+    }
+    return requests.get(url_list[method], proxies=proxy_s).text
 
 
 def get_engine(engine_arr, proxy_dict=None):
     """ Метод возвращает список торговых площадок. """
-    resp_engine = get_requests(url_generate(num=0), proxys=proxy_dict)
+
+    resp_engine = json.loads(get_requests(ApiMethod.GET_ISS, proxy_s=proxy_dict))
+
     # Запоминаем номер колонки с названием параметра, далее с описанием.
     eng_name = resp_engine['engines']['columns'].index('name')
     eng_title = resp_engine['engines']['columns'].index('title')
+
+    # Пробегая по массиву данных, всё что относится к фондовому рынку складываем в параметры.
     for eng in resp_engine['engines']['data']:
-        # Пробегая по массиву данных, всё что относится к фондовому рынку складываем в параметры.
         if eng[eng_title].lower().count('фондовый рынок') > 0:
             engine_arr.append([eng[eng_name]])
     return engine_arr
@@ -180,17 +138,19 @@ def get_engine(engine_arr, proxy_dict=None):
 
 def get_market(eng, proxy_dict=None):
     """ Метод добавляет к торговой площадке словарь с соответствующими рынками. """
-    # Надо узнать какие рынки есть на интересующих нас площадка
+
+    # Надо узнать какие рынки есть на интересующих нас площадка.
     eng.append({})
-    resp_market = get_requests(url_generate(num=1, engine=eng[0]), proxys=proxy_dict)
+    resp_market = json.loads(get_requests(ApiMethod.GET_MARKETS, engine=eng[0], proxy_s=proxy_dict))
     # Запоминаем номер колонки с названием рынка, далее с описанием.
     mar_name = resp_market['markets']['columns'].index('NAME')
     mar_title = resp_market['markets']['columns'].index('title')
+
+    # Находим рынок акций, индексов и облигаций и записываем их в подготовленный словарь,
+    # соотносящийся с торговой площадкой. Список не подойдет, специфика обработки данных инструментов
+    # может отличаться, и хотя я излазил весь api вдоль и поперёк и знаю что откуда придет, хочется
+    # сохранить вид абстракции и вид что я не ведаю что ж придет и в какой последовательности.
     for mar in resp_market['markets']['data']:
-        # Находим рынок акций, индексов и облигаций и записываем их в подготовленный словарь,
-        # соотносящийся с торговой площадкой. Список не подойдет, специфика обработки данных инструментов
-        # может отличаться, и хотя я излазил весь api вдоль и поперёк и знаю что откуда придет, хочется
-        # сохранить вид абстракции и вид что я не ведаю что ж придет и в какой последовательности.
         if 'индекс' in mar[mar_title].lower():
             eng[1]['idx'] = [mar[mar_name]]
             continue
@@ -204,8 +164,10 @@ def get_market(eng, proxy_dict=None):
 
 def get_boards_shar(eng, proxy_dict=None):
     """ Метод собирает все актуальные режимы торговли акциями. """
+
     eng[1]['aks'].append([])
-    resp_bonds = get_requests(url_generate(num=2, engine=eng[0], market=eng[1]['aks'][0]), proxys=proxy_dict)
+    resp_bonds = json.loads(get_requests(ApiMethod.GET_BOARDS, engine=eng[0],
+                                         market=eng[1]['aks'][0], proxy_s=proxy_dict))
     bon_name = resp_bonds['boards']['columns'].index('boardid')
     bon_title = resp_bonds['boards']['columns'].index('title')
     for bon in resp_bonds['boards']['data']:
@@ -222,8 +184,10 @@ def get_boards_shar(eng, proxy_dict=None):
 
 def get_boards_ind(eng, proxy_dict=None):
     """ Метод собирает все актуальные режимы торговли индексами. """
+
     eng[1]['idx'].append([])
-    resp_bonds = get_requests(url_generate(num=2, engine=eng[0], market=eng[1]['idx'][0]), proxys=proxy_dict)
+    resp_bonds = json.loads(get_requests(ApiMethod.GET_BOARDS, engine=eng[0],
+                                         market=eng[1]['idx'][0], proxy_s=proxy_dict))
     bon_name = resp_bonds['boards']['columns'].index('boardid')
     # bon_title = resp_bonds['boards']['columns'].index('title')
     for bon in resp_bonds['boards']['data']:
@@ -234,8 +198,10 @@ def get_boards_ind(eng, proxy_dict=None):
 
 def get_boards_bon(eng, proxy_dict=None):
     """ Метод собирает все актуальные режимы торговли облигациями. """
+
     eng[1]['obl'].append([])
-    resp_bonds = get_requests(url_generate(num=2, engine=eng[0], market=eng[1]['obl'][0]), proxys=proxy_dict)
+    resp_bonds = json.loads(get_requests(ApiMethod.GET_BOARDS, engine=eng[0],
+                                         market=eng[1]['obl'][0], proxy_s=proxy_dict))
     bon_name = resp_bonds['boards']['columns'].index('boardid')
     bon_title = resp_bonds['boards']['columns'].index('title')
     for bon in resp_bonds['boards']['data']:
@@ -249,79 +215,56 @@ def get_boards_bon(eng, proxy_dict=None):
 
 
 def get_tools(eng, mar, bon, tool_var, proxy_dict=None):
-    # Сервис отдаёт данные порциями, согласно документации,
-    # нужно будет как-то ориентироваться когда тот момент,
-    # что мы выбрали всё и пора переходить на следующий инструмент.
-    # Делать это будем по дате и введем две переменные с начальным значением год назад.
-    control_date = today(yeas_sec)  # Будем контролировать вернувшуюся дату
-    temp_data_end = today(yeas_sec)  # А сюда вставлять дату начала запроса
-    a = 0  # Сбрасываем номер файла с данными по инструменту
-    der = f'{eng}_{mar}_{bon}_{tool_var}_'  # Создаём имя файла
-    # Фактически за три прохода можно выбрать всю информацию по инструменту, но если что пойдет не так сделаем шесть
-    # проходов, если цикл не прервется раньше по условиям, то и не стоит оно того
-    for x_int in range(1):
-        temp_list = []
-        file_in_dir = os.listdir(path='data/enter')
-        for inx in file_in_dir:
-            if inx.find(der) != -1:
-                temp_list.append(inx)
-        temp_list.sort()
-        print(temp_list)
-        if len(temp_list) > 0:
-            # И вот если у нас уже есть файлы с информацией по нашему инструменту.
-            # Инкрементируем а, дата полученную в прошлый раз, сохраняем для контроля,
-            # и получаем дату последней записи.
-            temp_in = temp_list[len(temp_list) - 1]
-            temp_a = int(temp_in[len(temp_in) - 9:len(temp_in) - 4:1])
-            a = temp_a + 1
-            control_date = temp_data_end
-            temp_data_end = data_get(temp_in)
+    """ Метод проверяет, выгружали ли мы раньше данные по этому инструменту и полноту этих данных;
+        а также при необходимости догружает торговые данные с биржи. """
 
-            # Последняя публикация итогов торгов вчера или в пятницу, если вчера не пятница.
-            # А также стоит учесть случаи когда полученная такая же что и в предыдущем запросе,
-            # значит данные больше не публикуются, и случай что нет записей.
-            # Все это является весомой причиной перейти к следующему инструменту.
-            if time.ctime(time.time())[0:3:1] == 'Mon':
-                if temp_data_end == today(60 * 60 * 72):
-                    print('break')
-                    break
-            if time.ctime(time.time())[0:3:1] == 'Sun':
-                if temp_data_end == today(60 * 60 * 48):
-                    print('break')
-                    break
-            if temp_data_end == today(60 * 60 * 24):
-                print('break')
-                break
-            if temp_data_end == control_date:
-                print('break')
-                break
-            if temp_data_end is None:
-                print('break')
-                break
+    f_for_tool = None  # Создадим ссылку, гле будем хранить имя файла с торговыми данными
+    go_update_trade = False  # Флаг обновления торговых данных
+    temp_data_end = today(yeas_sec)  # Дата начала запроса
+    der = f'{eng}_{mar}_{bon}_{tool_var[0]}_'  # Создаём имя файла
+
+    # Поищем нет ли у нас ранние загруженных данных по этому инструменту,
+    # если есть узнаем последнюю дату, а если нет поставим метку, что нет.
+    file_in_dir = os.listdir(path='data/enter')
+    for inx in file_in_dir:
+        if der in inx:
+            file_frame = inx
+            data_end = inx[len(inx) - 10:len(inx):1]
+            if data_end > temp_data_end:
+                temp_data_end = data_end
+            break
+    else:
+        file_frame = None
+
+    # Если данные за актуальную дату уходим из цикла.
+    # В противном случае загружаем данные в фрейм, если они есть.
+    if not (check_date(temp_data_end)):
+        if not (file_frame is None):
+            df_buf = analtydata.get_frame_in_base(f'data/enter/{file_frame}')
         else:
-            # В этом else смыла нет, но если кто-то удаляет файлы в момент скачивания датасета,
-            # целостность не потеряется.
-            temp_data_end = today(yeas_sec)
+            df_buf = None
 
-        der = der + f'{a:05}'
-        get_requests(url_generate(num=10, engine=eng, market=mar, board=bon, security=tool_var,
-                                  data_format='.csv', date_till=today(), date_from=temp_data_end),
-                     proxys=proxy_dict,
-                     file_name=f'data/enter/temp_{der}.csv')
+        # Собираем информацию запросами.
+        for x_int in range(range_tool):
+            with open(f'temp/temp_candles{x_int}.csv', 'w') as tmp_file:
+                tmp_file.write(get_requests(ApiMethod.GET_CANDLES, engine=eng, market=mar, board=bon,
+                                            security=tool_var[0], data_format='.csv', date_till=today(),
+                                            date_from=temp_data_end, proxy_s=proxy_dict))
 
-        # Удаляем две первые строки из файла.
-        new_temp_file = open(f'data/enter/temp_{der}.csv', 'r')
-        new_file = open(f'data/enter/{der}.csv', 'w')
-        write_file_csv = 0
-        for rfc in new_temp_file:
-            if write_file_csv > 1:
-                new_file.write(rfc)
-                write_file_csv += 1
-        new_file.close()
-        new_temp_file.close()
-        os.remove(f'data/enter/temp_{der}.csv')
+            # Добавляем информацию в датафрейм.
+            df_buf, control_data = analtydata.get_new_file_tool(data_frame=df_buf, f=f'temp/temp_candles{x_int}.csv')
 
-        time.sleep(0.05)  # чтоб не подумали что мы участники DDoS атаки
-        print('der/', der)
-
-    print('end')
+            # Проверяем дату и если у нас нет причин продолжать сохраняем что есть и уходим.
+            if check_date(control_data) or temp_data_end == control_data or control_data is None:
+                go_update_trade = True
+                if control_data is None:
+                    control_data = 'NOT_ACTIVE'
+                    go_update_trade = False
+                if temp_data_end == control_data:
+                    go_update_trade = False
+                f_for_tool = der + control_data
+                analtydata.save_data(df_buf, der + control_data)
+                break
+            else:
+                temp_data_end = control_data
+    return f_for_tool, go_update_trade

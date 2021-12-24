@@ -1,7 +1,8 @@
 import time
 import json
-import apirestmoex
 import analtydata
+import apirestmoex
+import config
 import proxy
 import os
 
@@ -9,8 +10,6 @@ import os
 def option_main():
     """ Метод задает начальный опции, нужно или включить proxy, что стоит указать в модуле proxy.py
      и проверяет есть или у нас необходимая информация для запросов."""
-
-    #  «ОТМЕЧУ СЕБЕ!!!» что достоверность информации не проверяется и надо обдумать этот момент.
 
     if proxy.proxy_use:
         proxy_lict = {
@@ -34,14 +33,20 @@ def option_main():
 
 
 if __name__ == '__main__':
+
+    print('Проверяем директории ...')
     if not ('data' in os.listdir(path='.')):
         os.mkdir('data')
+    if not ('temp' in os.listdir(path='.')):
+        os.mkdir('temp')
     if not ('enter' in os.listdir(path='data')):
         os.mkdir('data/enter')
     if not ('data_for_spark' in os.listdir(path='data')):
         os.mkdir('data/data_for_spark')
     if not ('trade' in os.listdir(path='data')):
         os.mkdir('data/trade')
+    if not ('trade' in os.listdir(path='data')):
+        os.mkdir('data/graphic')
 
     #  Соглашаемся с настройками proxy и нужно ли нам загружать параметры или они уже есть.
     proxyDict, run_enter = option_main()
@@ -50,16 +55,15 @@ if __name__ == '__main__':
     # по факту нас интересует одна, но вдруг захочется добавить ещё.
     engine_arr = []
 
+    print('Собираем информацию о торговых режимах ...')
     if run_enter:
-        # Запрашиваем или обновляем параметры
+        # Запрашиваем список торговых площадок
         engine_arr = apirestmoex.get_engine(engine_arr, proxyDict)
 
-        if not engine_arr:
-            print('Фондовый рынок не доступен, попробуйте позже.')
         for eng in engine_arr:
             apirestmoex.get_market(eng, proxyDict)
 
-        # Теперь находим параметры торговых режимов, немного поизучав что это такое,
+        # Теперь находим параметры торговых режимов, немного поизучав, что это такое,
         # узнал что у разных групп инструментов они разные, так что и обработку мы
         # будем вести отдельно, и главное не запутаться в подстановках.
         for eng in engine_arr:
@@ -75,49 +79,60 @@ if __name__ == '__main__':
             for mar_key in eng[1]:
                 mar = (eng[1][mar_key])
                 for bon in mar[1]:
-                    resp_tool = apirestmoex.\
-                        get_requests(apirestmoex.url_generate(num=4, engine=eng[0], market=mar[0],
-                                                              board=bon[0]), proxys=proxyDict)
+                    resp_tool = json.loads(apirestmoex.get_requests(apirestmoex.ApiMethod.GET_TOOL, engine=eng[0],
+                                                                    market=mar[0], board=bon[0], proxy_s=proxyDict))
                     sec_name = resp_tool['securities']['columns'].index('SECID')
+                    short_name = resp_tool['securities']['columns'].index('SHORTNAME')
                     for sec_id in resp_tool['securities']['data']:
-                        bon[1].append(sec_id[sec_name])
-            # И это было не просто, так что сохраню ка я все параметры в файл.
-            # Чтоб не потерялось.
-        list_requests = open('file.json', 'w')
-        engine_json = json.dumps(engine_arr)
-        list_requests.write(str(engine_json))
-        list_requests.close()
+                        bon[1].append([sec_id[sec_name], sec_id[short_name]])
+
+        # И это было не просто, так что сохраню ка я все параметры в файл.
+        # Чтоб не потерялось.
+        with open(f'data/trade/{time.ctime()[4:7:1]}.json', 'w') as list_requests:
+            engine_json = json.dumps(engine_arr)
+            list_requests.write(str(engine_json))
     else:
         # И если у нас есть файл с параметрами, и нам не страшно,
         # вдруг там кто-то что-то поправил или на бирже что-то поменялось, то открываем и читаем.
-        list_requests = open('file.json', 'r')
-        list_read = list_requests.read()
-        list_requests.close()
-        engine_arr = json.loads(list_read)
+        with open(f'data/trade/{time.ctime()[4:7:1]}.json', 'r') as list_requests:
+            list_read = list_requests.read()
+            engine_arr = json.loads(list_read)
 
+    print('Собираем информацию о торговых инструментах ...')
+    trader_data = None  # Ссылка для объекта содержащим дата фреймы для аналитики
     # Раскладываем параметры на составное
     for eng in engine_arr:
         for mar_key in eng[1]:
             mar = (eng[1][mar_key])
             for bon in mar[1]:
                 for tool_var in bon[1]:
-                    apirestmoex.get_tools(eng=eng[0], mar=mar[0], bon=bon[0], tool_var=tool_var)
+                    # Ограничение для запросов
+                    if config.restriction(eng=eng[0], mar=mar[0], bon=bon[0], tool_var=tool_var[0]):
+                        dir_new_data, go_update_trade = apirestmoex.get_tools(eng=eng[0], mar=mar[0], bon=bon[0],
+                                                                              tool_var=tool_var, proxy_dict=proxyDict)
 
-    print(engine_arr)
+                        # Если пришло что-то новое, обрабатываем данные, создаем объект для хранения, если его нет.
+                        if go_update_trade:
+                            in_corr, trade_table = analtydata.data_get(path_dir='data/enter/', file_data=dir_new_data)
+                            if trader_data is None:
+                                trader_data = analtydata.Trader()
+                            trader_data.update_trade(in_corr, trade_table)
 
-    # test code:
+    print('Анализируем данные, строим торговые стратегии ...')
 
-    if engine_arr == [['stock',
-                       {'idx': ['index', [['INAV', []], ['MMIX', []], ['RTSI', []], ['SDII', []], ['SNDX', []]]],
-                        'aks': ['shares', [['TQBR', []], ['TQDE', []], ['TQLI', []], ['TQLV', []], ['TQTF', []]]],
-                        'obl': ['bonds', [['EQTC', []], ['TQCB', []], ['TQNO', []], ['TQOB', []], ['TQOS', []],
-                                          ['TQOV', []], ['TQRD', []], ['TQTC', []]]]}]]:
-        print(True)
+    # Если мы обновляли какие-то расчеты, то стоит их сохранить,
+    # если ничего интересного не пришло загрузим данные локально.
+    if trader_data is None:
+        trader_data = analtydata.Trader()
     else:
-        print(False)
+        trader_data.write_data()
 
-    print([['stock',
-            {'idx': ['index', [['INAV', []], ['MMIX', []], ['RTSI', []], ['SDII', []], ['SNDX', []]]],
-             'aks': ['shares', [['TQBR', []], ['TQDE', []], ['TQLI', []], ['TQLV', []], ['TQTF', []]]],
-             'obl': ['bonds', [['EQTC', []], ['TQCB', []], ['TQNO', []], ['TQOB', []], ['TQOS', []],
-                               ['TQOV', []], ['TQRD', []], ['TQTC', []]]]}]])
+    # Создадим таблицу зависимостей.
+    trader_data.create_table_corr()
+    trader_data.show_df()
+
+    # Немного уберём мусор за собой.
+    analtydata.data_old.drop_old()
+    analtydata.data_old.rename_dir()
+
+    print('end')
