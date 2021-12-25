@@ -1,11 +1,13 @@
 import apirestmoex
 import config
+
+import os
+import numpy
 import pyspark.sql.functions as funsp
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.types import StructType, StructField, StringType, FloatType
 from pyspark.sql.window import Window
-import os
-import numpy
+from colorama import Fore
 
 # Запускаем сессию pyspark.
 spark = SparkSession.builder.getOrCreate()
@@ -70,7 +72,10 @@ def get_new_file_tool(data_frame=None, f=None):
           )
     if not (data_frame is None):
         df = DataFrame.union(df, data_frame)
-    control_date = df.agg(funsp.max('TRADEDATE')).collect()[0][0]
+    if df.select(funsp.count(funsp.when(funsp.col('WAPRICE').isNull(), 'WAPRICE'))).collect()[0][0] == 0:
+        control_date = df.agg(funsp.max('TRADEDATE')).collect()[0][0]
+    else:
+        control_date = None
     return df, control_date
 
 
@@ -119,6 +124,7 @@ def data_get(path_dir='.', file_data=None, schema=None, colons='shares'):
     # Отсекаем лишние данные по дате.
     df = df.select(colons).distinct().filter(f'TRADEDATE > "{date}"').orderBy('TRADEDATE')
 
+    up_data = True
     # Собираем данные для графика.
     graphic = df.select('TRADEDATE', 'SHORTNAME', 'SECID', 'OPEN', 'LOW', 'HIGH', 'CLOSE', )
     graphic.repartition(1).write.mode("overwrite").format("parquet").save(f'data/graphic/{file_data}')
@@ -164,7 +170,8 @@ def data_get(path_dir='.', file_data=None, schema=None, colons='shares'):
     df = (df
           .withColumn("is_last_row_in_window", funsp.lead("DYNAMIC", 1, True).over(w_id) != funsp.col("DYNAMIC"))
           .withColumn("window_id",
-                      funsp.lag(funsp.sum(funsp.col("is_last_row_in_window").cast("int")).over(w_id), 1, 0).over(w_id))
+                      funsp.lag(funsp.sum(funsp.col("is_last_row_in_window").cast("int")).over(w_id), 1, 0).over(
+                          w_id))
           # Движение тренда.
           .withColumn("sum_value", funsp.sum('D_VAR').over(Window.partitionBy("window_id")))
           # Берём медианное значение влияния волатильности и цены лота.
@@ -183,12 +190,18 @@ def data_get(path_dir='.', file_data=None, schema=None, colons='shares'):
            .withColumn('GR_FAL', funsp.col('result')).drop('result')
            )
     # Добавим наши расчеты, ради которых все и затевалось, в строку для записи в торговую таблицу.
-    trade_table = (trade_table
-                   .withColumn('RISK_%', funsp.round(funsp.lit(df2.select('GR_FAL').where('DYNAMIC = "falling"')
-                                                               .collect()[0][0] * 100), 2))
-                   .withColumn('PROFIT_%', funsp.round(funsp.lit(df2.select('GR_FAL').where('DYNAMIC = "growing"')
-                                                                 .collect()[0][0] * 100), 2)))
-    return in_corr, trade_table
+    try:
+        trade_table = (trade_table
+                       .withColumn('RISK_P', funsp.round(funsp.lit(df2.select('GR_FAL').where('DYNAMIC = "falling"')
+                                                                   .collect()[0][0] * 100), 2))
+                       .withColumn('PROFIT_P',
+                                   funsp.round(funsp.lit(df2.select('GR_FAL').where('DYNAMIC = "growing"')
+                                                         .collect()[0][0] * 100), 2)))
+    except IndexError:
+        up_data = False
+    except TypeError:
+        up_data = False
+    return up_data, in_corr, trade_table
 
 
 class Trader:
@@ -199,8 +212,8 @@ class Trader:
                              StructField('SECID', StringType()),
                              StructField('BOARDID', StringType()),
                              StructField('PRICE', FloatType()),
-                             StructField('RISK_%', FloatType()),
-                             StructField('PROFIT_%', FloatType())
+                             StructField('RISK_P', FloatType()),
+                             StructField('PROFIT_P', FloatType())
                              ])
         schema2 = StructType([StructField('TRADEDATE', StringType()),
                               StructField('SECID', FloatType())
@@ -227,22 +240,26 @@ class Trader:
     def update_trade(self, in_corr, table_trade):
         """ Метод принимает обработанные данные по новому инструменту
             и добавляет их в торговые таблицы или обновляет. """
+
         drop_col = in_corr.columns[1 - in_corr.columns.index('TRADEDATE')]
         if drop_col in self.df_corr.columns:
             self.df_corr = self.df_corr.drop(drop_col)
         self.df_corr = self.df_corr.join(in_corr, 'TRADEDATE', 'outer')
+
         drop_row = table_trade.select('SECID').collect()[0][0]
         self.df_trade = self.df_trade.where(f'SECID != "{drop_row}"')
         self.df_trade = DataFrame.union(self.df_trade, table_trade)
 
     def write_data(self):
         """ Метод сохраняет торговые таблицы в файлы. """
+
         if 'SECID' in self.df_corr.columns:
             self.df_corr = self.df_corr.drop('SECID')
         self.df_corr.repartition(1).write.mode("overwrite").format("csv").option("header", "true") \
             .option("delimiter", ";").save('data/data_for_spark/in_corr__00-00-01')
         data_old.app_drop('data/data_for_spark/', 'in_corr__00-00-01')
         data_old.app_rename('data/data_for_spark/in_corr__00-00-01', 'data/data_for_spark/in_corr__00-00-00')
+
         self.df_trade.repartition(1).write.mode("overwrite").format("csv").option("header", "true") \
             .option("delimiter", ";").save('data/data_for_spark/trade_table__00-00-01')
         data_old.app_drop('data/data_for_spark/', 'trade_table__00-00-01')
@@ -251,11 +268,11 @@ class Trader:
     def create_table_corr(self):
         """ Метод преобразует таблицу с ценами торговых инструментов
             в таблицу зависимостей торговых инструментов между собой. """
+
         self.df_corr = self.df_corr.drop('TRADEDATE')
+
         schem_col = self.df_corr.columns
-        corr_array = []
-        for itr in range(len(schem_col)):
-            corr_array.append([])
+        corr_array = list(map(lambda it: [], schem_col))
         for r_line in self.df_corr.collect():
             col_itr = 0
             for elm in r_line:
@@ -263,8 +280,11 @@ class Trader:
                     elm = 0
                 corr_array[col_itr].append(float(elm))
                 col_itr += 1
+
         corr_array = numpy.vstack(corr_array)
         corr_array = numpy.corrcoef(corr_array)
+        print(Fore.CYAN + 'Почти готово ...' + Fore.GREEN)
+
         data_list = []
         col_itr = 0
         for itr in corr_array:
@@ -274,18 +294,75 @@ class Trader:
             data_list[col_itr].append(schem_col[col_itr])
             col_itr += 1
 
-        new_schem = []
-        for itr in schem_col:
-            new_schem.append(StructField(itr, FloatType()))
+        new_schem = [StructField(itr, FloatType()) for itr in schem_col]
         new_schem.append(StructField('SECID', StringType()))
         rdd = spark.sparkContext.parallelize(data_list)
         self.df_corr = spark.createDataFrame(rdd, StructType(new_schem))
 
-        # df_secid = spark.createDataFrame([Row(**{'SECID': x}) for x in schem_col])
-        # df_rdd = df_rdd.withColumn('NUM', funsp.row_number().over(Window.orderBy(funsp.lit('A'))))
-        # df_secid = df_secid.withColumn('NUM', funsp.row_number().over(Window.orderBy(funsp.lit('A'))))
-        # df_rdd = df_rdd.join(df_secid, 'NUM', 'outer')
+    def tc(self, cortege):
+        """ Метод выводит предложение по инвестициям оптимальное для заданных параметров, но это не точно ... """
+
+        en_risk = cortege[0]
+        en_prof = cortege[1]
+        en_sum = cortege[2]
+        self.df_trade.createOrReplaceTempView("df_trade")
+        self.df_corr.createOrReplaceTempView("df_corr")
+        ds_one = spark.sql(f"""
+            select SHORTNAME, SECID, BOARDID, PRICE from df_trade
+            where PROFIT_P = (select max(PROFIT_P)
+                              from df_trade
+                              where RISK_P < {en_risk} and PRICE < {en_sum/4})
+        """)
+        secid = ds_one.select('SECID').collect()[0][0]
+        if ds_one.agg(funsp.count('SECID')).collect()[0][0] > 0:
+            for itr in range(10):
+                ds_two = spark.sql(f"""
+                    with rdf as (select df_trade.SECID, RISK_P
+                                from df_trade
+                                join df_corr using (SECID)
+                                where {secid} < {config.corr} and PROFIT_P > {en_prof} and PRICE < {en_sum / 4})                              
+                    select SHORTNAME, SECID, BOARDID, PRICE from rdf
+                    join df_trade using (SECID)
+                    where rdf.RISK_P = (select min(RISK_P) from rdf)                            
+                """)
+                if ds_two.agg(funsp.count('SECID')).collect()[0][0] > 0:
+                    ds_tre = DataFrame.union(ds_one, ds_two)
+                    ds_tre = DataFrame.union(ds_tre, spark.sql(f"""
+                        with rdf as (select df_trade.SECID, PROFIT_P, RISK_P,
+                                    case when RISK_P < {en_risk} then 'r'
+                                    when  PROFIT_P > {en_prof} then 'p'                                              
+                                    else 'd' end sel
+                                    from df_trade                                    
+                                    join df_corr using (SECID)
+                                    where (({secid} < 0 and {secid} > -0.3)
+                                    or ({secid} > 0 and {secid} < 0.3)) and PRICE < {en_sum / 4})                              
+                            select SHORTNAME, SECID, BOARDID, PRICE
+                            from rdf  
+                            join df_trade using (SECID)
+                            where rdf.PROFIT_P = (select max(PROFIT_P) from rdf where sel = 'r') 
+                            or rdf.RISK_P = (select min(RISK_P) from rdf where sel = 'p')                                
+                    """))
+                    (ds_tre
+                     .distinct()
+                     .withColumn('Наименование', funsp.col('SHORTNAME')).drop('SHORTNAME')
+                     .withColumn('Код актива', funsp.col('SECID')).drop('SECID')
+                     .withColumn('Код режима торгов', funsp.col('BOARDID')).drop('BOARDID')
+                     .withColumn('Цена', funsp.col('PRICE')).drop('PRICE')
+                     .withColumn('Количество', funsp.round(en_sum / funsp.col('Цена') /
+                                                           ds_tre.agg(funsp.count('PRICE')).collect()[0][0], 0)).show()
+                     )
+                    break
+                en_prof *= 0.9
+            else:
+                print(Fore.LIGHTRED_EX, end='')
+                print('К сожалению нет возможности сформировать предложение с указанными параметрами.')
+                print(Fore.LIGHTBLUE_EX + 'Попробуйте уменьшить ожидаемую прибыль.' + Fore.GREEN)
+        else:
+            print(Fore.LIGHTRED_EX, end='')
+            print('К сожалению нет возможности сформировать предложение с указанными параметрами.')
+            print(Fore.LIGHTBLUE_EX + 'Может стоит больше рискнут?' + Fore.GREEN)
 
     def show_df(self):
         self.df_corr.show()
         self.df_trade.show()
+        self.df_trade.agg(funsp.count('SECID')).show()

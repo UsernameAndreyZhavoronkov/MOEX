@@ -1,9 +1,10 @@
+import analtydata
+
 import requests
 import json
 import time
-from enum import Enum
-import analtydata
 import os
+from enum import Enum
 
 yeas_sec = 31536000  # количество секунд в году
 range_tool = 6  # Максимально количество запросов данных для графиков по одному торговому инструменту
