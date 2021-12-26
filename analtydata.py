@@ -212,7 +212,8 @@ def data_get(path_dir='.', file_data=None, schema=None, colons='shares'):
     return up_data, in_corr, trade_table
 
 
-def graph_show(gr_file, date1, date2):
+def graph_show(gr_file, date1='min', date2='max'):
+    """ Метод строит график цен по данным из принятого файла. """
     if date1 == 'min':
         date1 = "0000-01-01"
     if date2 == 'max':
@@ -227,13 +228,16 @@ def graph_show(gr_file, date1, date2):
              .option("delimiter", ";")
              .load(gr_file))
     graph = graph.filter(f'TRADEDATE > "{date1}" and TRADEDATE < "{date2}"').toPandas()
+    title = graph['SHORTNAME'][0]
 
-    fig, ax = plt.subplots()
-    fig.set_size_inches(16, 9)
+    fig = plt.figure(figsize=(16, 9))
+    ax = fig.add_subplot()
+    fig.suptitle(title)
     fig.subplots_adjust(bottom=0.2)
     ax.xaxis.set_major_locator(mondays)
     ax.xaxis.set_minor_locator(all_days)
     ax.xaxis.set_major_formatter(week_formatter)
+    ax.set_ylabel('Цена, руб.')
 
     candlestick_ohlc(ax, zip(mpl_dates.date2num(graph['TRADEDATE']), graph['OPEN'], graph['HIGH'], graph['LOW'],
                              graph['CLOSE']), width=0.6, colorup='g', colordown='r')
