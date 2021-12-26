@@ -1,5 +1,3 @@
-import colorama
-
 import analtydata
 import apirestmoex
 import config
@@ -10,7 +8,7 @@ import proxy
 import time
 import json
 import os
-from colorama import Fore, Style
+from colorama import Fore, Style, init
 
 
 def option_main():
@@ -40,7 +38,7 @@ def option_main():
 
 if __name__ == '__main__':
     if not (os.name == 'posix'):
-        colorama.init(convert=True)
+        init(convert=True)
     print(Style.BRIGHT, Fore.CYAN)
     print('Проверяем директории ...')
     if not ('data' in os.listdir(path='.')):

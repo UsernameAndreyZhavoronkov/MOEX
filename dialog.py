@@ -1,4 +1,5 @@
 import config
+import analtydata
 
 import time
 from colorama import Fore
@@ -87,8 +88,8 @@ def dialog(cyc_run):
 
 def dialog2(gr_dir):
     while True:
-        print(Fore.GREEN + 'Введите код актива.')
-        print('Чтобы задать даты, используйте формат: ' + Fore.YELLOW + 'Код актива*Дата начала*Дата конца')
+        print(Fore.GREEN + 'Введите код актива, чтобы построить график.')
+        print('Или чтобы задать даты, используйте формат: ' + Fore.YELLOW + 'Код актива*YYYY-MM-DD*YYYY-MM-DD')
         print(Fore.GREEN + 'Чтобы перейти подбора инвестиций введите: ' + Fore.YELLOW + 'back')
         print(Fore.LIGHTMAGENTA_EX + '$$$ ' + Fore.WHITE, end='')
         graph = input()
@@ -97,14 +98,22 @@ def dialog2(gr_dir):
             break
         date_start, s1, date_end = date_.partition('*')
         for itr in gr_dir:
-            if graph in itr:
-                print(Fore.LIGHTMAGENTA_EX + 'График ' + Fore.YELLOW + f'[{itr}]' + Fore.LIGHTMAGENTA_EX +
-                      ' с даты --> ' + Fore.YELLOW + f'[{date_start}]' + Fore.LIGHTMAGENTA_EX + ' по дату --> ' +
-                      Fore.YELLOW + f'[{date_end}]' + Fore.LIGHTMAGENTA_EX + ' строится разработчиком.')
+            if f'_{graph.upper()}_' in itr:
+                try:
+                    date_start = time.strptime(date_start, '%Y-%m-%d')
+                    date_start = time.strftime('%Y-%m-%d', date_start)
+                except ValueError:
+                    date_start = 'min'
+                try:
+                    date_end = time.strptime(date_end, '%Y-%m-%d')
+                    date_end = time.strftime('%Y-%m-%d', date_end)
+                except ValueError:
+                    date_end = 'max'
+                print(Fore.LIGHTMAGENTA_EX + 'График ' + Fore.YELLOW + f'[{itr[0:len(itr) - 10:1]}]' +
+                      Fore.LIGHTMAGENTA_EX + ' с даты --> ' + Fore.YELLOW + f'[{date_start}]' + Fore.LIGHTMAGENTA_EX +
+                      ' по дату --> ' + Fore.YELLOW + f'[{date_end}]')
+                analtydata.graph_show(f'data/graphic/{itr}', date_start, date_end)
                 break
         else:
             print(Fore.LIGHTRED_EX + f'К сожалению по активу ' + Fore.YELLOW + f'[{graph}]' +
                   Fore.LIGHTRED_EX + ' нет информации для построения графика.')
-
-
-

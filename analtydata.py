@@ -3,12 +3,20 @@ import config
 
 import os
 import numpy
+import matplotlib
+import matplotlib.dates as mpl_dates
+import matplotlib.pyplot as plt
+from matplotlib.dates import DateFormatter, DayLocator, WeekdayLocator
+from mpl_financa_modify import candlestick_ohlc
+
 import pyspark.sql.functions as funsp
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.types import StructType, StructField, StringType, FloatType
 from pyspark.sql.window import Window
 from colorama import Fore
 
+
+matplotlib.use('Qt5Agg')
 # Запускаем сессию pyspark.
 spark = SparkSession.builder.getOrCreate()
 
@@ -202,6 +210,39 @@ def data_get(path_dir='.', file_data=None, schema=None, colons='shares'):
     except TypeError:
         up_data = False
     return up_data, in_corr, trade_table
+
+
+def graph_show(gr_file, date1, date2):
+    if date1 == 'min':
+        date1 = "0000-01-01"
+    if date2 == 'max':
+        date2 = "2999-12-01"
+
+    mondays = WeekdayLocator(mpl_dates.MONDAY)
+    all_days = DayLocator()
+    week_formatter = DateFormatter('%Y %b %d')
+
+    graph = (spark.read.format("parquet")
+             .option("header", 'true')
+             .option("delimiter", ";")
+             .load(gr_file))
+    graph = graph.filter(f'TRADEDATE > "{date1}" and TRADEDATE < "{date2}"').toPandas()
+
+    fig, ax = plt.subplots()
+    fig.set_size_inches(16, 9)
+    fig.subplots_adjust(bottom=0.2)
+    ax.xaxis.set_major_locator(mondays)
+    ax.xaxis.set_minor_locator(all_days)
+    ax.xaxis.set_major_formatter(week_formatter)
+
+    candlestick_ohlc(ax, zip(mpl_dates.date2num(graph['TRADEDATE']), graph['OPEN'], graph['HIGH'], graph['LOW'],
+                             graph['CLOSE']), width=0.6, colorup='g', colordown='r')
+
+    ax.xaxis_date()
+    ax.autoscale_view()
+    plt.setp(plt.gca().get_xticklabels(), rotation=90, horizontalalignment='right')
+    plt.grid()
+    plt.show()
 
 
 class Trader:
