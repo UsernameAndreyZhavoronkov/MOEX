@@ -231,20 +231,23 @@ def graph_show(gr_file, date1='min', date2='max'):
     title = graph['SHORTNAME'][0]
 
     fig = plt.figure(figsize=(16, 9))
+    fig.set(facecolor='#EEFFBB')
     ax = fig.add_subplot()
-    fig.suptitle(title)
+    fig.suptitle(title, fontsize=24, c='m', fontstyle='italic', bbox={'boxstyle': 'round', 'facecolor': '#E1A0FF'})
     fig.subplots_adjust(bottom=0.2)
+    ax.set(facecolor='#AAFFFF')
     ax.xaxis.set_major_locator(mondays)
     ax.xaxis.set_minor_locator(all_days)
     ax.xaxis.set_major_formatter(week_formatter)
-    ax.set_ylabel('Цена, руб.')
+    ax.set_ylabel('Цена, руб.', fontsize=14, rotation='horizontal', y=1, horizontalalignment='right',
+                  bbox={'boxstyle': 'round', 'facecolor': 'c'})
 
     candlestick_ohlc(ax, zip(mpl_dates.date2num(graph['TRADEDATE']), graph['OPEN'], graph['HIGH'], graph['LOW'],
                              graph['CLOSE']), width=0.6, colorup='g', colordown='r')
 
     ax.xaxis_date()
     ax.autoscale_view()
-    plt.setp(plt.gca().get_xticklabels(), rotation=90, horizontalalignment='right')
+    plt.setp(plt.gca().get_xticklabels(), rotation=75, horizontalalignment='right')
     plt.grid()
     plt.show()
 
