@@ -148,13 +148,21 @@ if __name__ == '__main__':
     print(Fore.CYAN)
     print('Анализируем данные, строим торговые стратегии ...')
 
+    if not (trader_data is None):
+        trader_data.write_data()
+
+    analtydata.spark.stop()
+
+    # Немного уберём мусор за собой.
+    analtydata.data_old.drop_old()
+    analtydata.data_old.rename_dir()
+
+    analtydata.spark = analtydata.SparkSession.builder.getOrCreate()
+
     # Если мы обновляли какие-то расчеты, то стоит их сохранить,
     # если ничего интересного не пришло загрузим данные локально.
-    if trader_data is None:
-        print(Fore.CYAN + 'Ещё немного ...' + Fore.GREEN)
-        trader_data = analtydata.Trader()
-    else:
-        trader_data.write_data()
+    print(Fore.CYAN + 'Ещё немного ...' + Fore.GREEN)
+    trader_data = analtydata.Trader()
 
     # Создадим таблицу зависимостей.
     trader_data.create_table_corr()
@@ -172,9 +180,5 @@ if __name__ == '__main__':
 
     # trader_data.show_df()
     analtydata.spark.stop()
-
-    # Немного уберём мусор за собой.
-    analtydata.data_old.drop_old()
-    analtydata.data_old.rename_dir()
 
     print('end')
