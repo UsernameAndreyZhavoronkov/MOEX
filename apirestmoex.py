@@ -6,7 +6,7 @@ import time
 import os
 from enum import Enum
 
-yeas_sec = 31536000  # количество секунд в году
+yeas_sec = 16000000  # количество секунд в году
 range_tool = 6  # Максимально количество запросов данных для графиков по одному торговому инструменту
 
 
@@ -227,6 +227,7 @@ def get_tools(eng, mar, bon, tool_var, proxy_dict=None):
     # Поищем нет ли у нас ранние загруженных данных по этому инструменту,
     # если есть узнаем последнюю дату, а если нет поставим метку, что нет.
     file_in_dir = os.listdir(path='data/enter')
+    path_corr = os.listdir(path='data/data_for_spark')
     for inx in file_in_dir:
         if der in inx:
             file_frame = inx
@@ -268,4 +269,7 @@ def get_tools(eng, mar, bon, tool_var, proxy_dict=None):
                 break
             else:
                 temp_data_end = control_data
+    elif not ('in_corr__00-00-00' in path_corr) and temp_data_end != 'NOT_ACTIVE':
+        go_update_trade = True
+        f_for_tool = der + temp_data_end
     return f_for_tool, go_update_trade
